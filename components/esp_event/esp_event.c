@@ -464,6 +464,12 @@ esp_err_t esp_event_loop_create(const esp_event_loop_args_t* event_loop_args, es
         goto on_err;
     }
 
+    loop->running_mutex = xSemaphoreCreateRecursiveMutex();
+    if (loop->running_mutex == NULL) {
+        ESP_LOGE(TAG, "create event loop mutex failed");
+        goto on_err;
+    }
+
     loop->mutex = xSemaphoreCreateRecursiveMutex();
     if (loop->mutex == NULL) {
         ESP_LOGE(TAG, "create event loop mutex failed");
@@ -519,6 +525,10 @@ on_err:
         vQueueDelete(loop->queue);
     }
 
+    if (loop->running_mutex != NULL) {
+        vSemaphoreDelete(loop->running_mutex);
+    }
+
     if (loop->mutex != NULL) {
         vSemaphoreDelete(loop->mutex);
     }
@@ -555,10 +565,31 @@ esp_err_t esp_event_loop_run(esp_event_loop_handle_t event_loop, TickType_t tick
     int64_t remaining_ticks = ticks_to_run;
 #endif
 
-    while(xQueueReceive(loop->queue, &post, ticks_to_run) == pdTRUE) {
+    // Semaphore protects atomic queue/handler dispatch.
+    if (xSemaphoreTakeRecursive(loop->running_mutex, remaining_ticks) != pdTRUE) {
+        // Return if we went over time.
+        return ESP_OK;
+    }
+
+    // If we hold the running semaphore and running_task is set,
+    // then this function is being called recursively from a handler.
+    // Don't allow executing task handlers recursively.
+    if (loop->running_task) {
+        xSemaphoreGiveRecursive(loop->running_mutex);
+        return ESP_OK;
+    }
+
+    // Update remaining ticks
+    if (ticks_to_run != portMAX_DELAY) {
+        end = xTaskGetTickCount();
+        remaining_ticks -= end - marker;
+        marker = end;
+    }
+
+    while(xQueueReceive(loop->queue, &post, remaining_ticks) == pdTRUE) {
         // The event has already been unqueued, so ensure it gets executed.
         xSemaphoreTakeRecursive(loop->mutex, portMAX_DELAY);
-
+        
         loop->running_task = xTaskGetCurrentTaskHandle();
 
         bool exec = false;
@@ -608,6 +639,7 @@ esp_err_t esp_event_loop_run(esp_event_loop_handle_t event_loop, TickType_t tick
             remaining_ticks -= end - marker;
             // If the ticks to run expired, return to the caller
             if (remaining_ticks <= 0) {
+                loop->running_task = NULL;
                 xSemaphoreGiveRecursive(loop->mutex);
                 break;
             } else {
@@ -624,6 +656,8 @@ esp_err_t esp_event_loop_run(esp_event_loop_handle_t event_loop, TickType_t tick
             ESP_LOGD(TAG, "no handlers have been registered for event %s:%d posted to loop %p", base, id, event_loop);
         }
     }
+
+    xSemaphoreGiveRecursive(loop->running_mutex);
 
     return ESP_OK;
 }
@@ -676,6 +710,7 @@ esp_err_t esp_event_loop_delete(esp_event_loop_handle_t event_loop)
     vSemaphoreDelete(loop_profiling_mutex);
 #endif
     vSemaphoreDelete(loop_mutex);
+    vSemaphoreDelete(loop->running_mutex);
 
     ESP_LOGD(TAG, "deleted loop %p", (void*) event_loop);
 

@@ -78,6 +78,7 @@ typedef struct esp_event_loop_instance {
     TaskHandle_t task;                                              /**< task that consumes the event queue */
     TaskHandle_t running_task;                                      /**< for loops with no dedicated task, the
                                                                             task that consumes the queue */
+    SemaphoreHandle_t running_mutex;                                /**< mutex to ensure atomic event dispatch */
     SemaphoreHandle_t mutex;                                        /**< mutex for updating the events linked list */
     esp_event_loop_nodes_t loop_nodes;                              /**< set of linked lists containing the
                                                                             registered handlers for the loop */
