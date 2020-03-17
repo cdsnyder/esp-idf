@@ -50,6 +50,7 @@
 [submodule "components/lwip/lwip"]
 	path = components/lwip/lwip
 	url = https://github.com/cdsnyder/esp-lwip.git
+	branch = 2.1.2-esp
 
 [submodule "components/mqtt/esp-mqtt"]
 	path = components/mqtt/esp-mqtt
