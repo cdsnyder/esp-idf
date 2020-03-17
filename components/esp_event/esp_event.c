@@ -885,28 +885,23 @@ esp_err_t esp_event_post_to(esp_event_loop_handle_t event_loop, esp_event_base_t
 
     BaseType_t result = pdFALSE;
 
-    // Find the task that currently executes the loop. It is safe to query loop->task since it is
-    // not mutated since loop creation. ENSURE THIS REMAINS TRUE.
-    if (loop->task == NULL) {
-        // The loop has no dedicated task. Find out what task is currently running it.
-        result = xSemaphoreTakeRecursive(loop->mutex, ticks_to_wait);
+    // Find out what task is currently running
+    result = xSemaphoreTakeRecursive(loop->mutex, 0);
 
-        if (result == pdTRUE) {
-            if (loop->running_task != xTaskGetCurrentTaskHandle()) {
-                xSemaphoreGiveRecursive(loop->mutex);
-                result = xQueueSendToBack(loop->queue, &post, ticks_to_wait);
-            } else {
-                xSemaphoreGiveRecursive(loop->mutex);
-                result = xQueueSendToBack(loop->queue, &post, 0);
-            }
+    if (result == pdTRUE) {
+        if (loop->running_task == xTaskGetCurrentTaskHandle()) {
+            // This thread is the currently running task
+            xSemaphoreGiveRecursive(loop->mutex);
+            result = xQueueSendToBack(loop->queue, &post, 0);
+        } else {
+            // This thread is not the currently running task
+            xSemaphoreGiveRecursive(loop->mutex);
+            result = xQueueSendToBack(loop->queue, &post, ticks_to_wait);
         }
     } else {
-        // The loop has a dedicated task.
-        if (loop->task != xTaskGetCurrentTaskHandle()) {
-            result = xQueueSendToBack(loop->queue, &post, ticks_to_wait);
-        } else {
-            result = xQueueSendToBack(loop->queue, &post, 0);
-        }
+        // We couldn't take the semaphore. This means we are not the
+        // running task.
+        result = xQueueSendToBack(loop->queue, &post, ticks_to_wait);
     }
 
     if (result != pdTRUE) {
